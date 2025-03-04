@@ -1,20 +1,33 @@
 import { App, Editor, MarkdownView, Modal, Notice, Plugin, PluginSettingTab, Setting } from 'obsidian';
+import openai from 'openai';
 
 // Remember to rename these classes and interfaces!
 
 interface MyPluginSettings {
 	mySetting: string;
+	openaiApiKey: string;
+	anthropicApiKey: string;
+	deepseekApiKey: string;
+	llmProvider: string;
+	llmModelId: string;
 }
 
 const DEFAULT_SETTINGS: MyPluginSettings = {
-	mySetting: 'default'
+	mySetting: 'default',
+	openaiApiKey: '',
+	anthropicApiKey: '',
+	deepseekApiKey: '',
+	llmProvider: 'openai',
+	llmModelId: 'gpt-4o'
 }
 
 export default class MyPlugin extends Plugin {
 	settings: MyPluginSettings;
-
+	apiCaller: ApiCaller;
 	async onload() {
 		await this.loadSettings();
+
+		this.apiCaller = new ApiCaller(this.settings);
 
 		// This creates an icon in the left ribbon.
 		const ribbonIconEl = this.addRibbonIcon('dice', 'Sample Plugin', (evt: MouseEvent) => {
@@ -91,6 +104,59 @@ export default class MyPlugin extends Plugin {
 	}
 }
 
+class ApiCaller {
+	private apiKey: string;
+	private llmModelId: string;
+	private provider: string;
+	constructor(settings: MyPluginSettings) {
+		this.provider = settings.llmProvider;
+		if (this.provider === 'openai') {
+			this.apiKey = settings.openaiApiKey;
+		} else if (this.provider === 'anthropic') {
+			this.apiKey = settings.anthropicApiKey;
+		} else if (this.provider === 'deepseek') {
+			this.apiKey = settings.deepseekApiKey;
+		}
+		this.llmModelId = settings.llmModelId;
+	}
+
+	createClient() {
+		const [provider, model] = this.llmModelId.split('/');
+		let baseUrl: string;
+
+		switch (provider) {
+			case 'openai':
+				baseUrl = 'https://api.openai.com/v1';
+				break;
+			case 'anthropic':
+				baseUrl = 'https://api.anthropic.com/v1';
+				break;
+			case 'deepseek':
+				baseUrl = 'https://api.deepseek.com/v1';
+				break;
+			default:
+				throw new Error(`Unsupported provider: ${provider}`);
+		}
+
+		return this.createOpenAIClient(model, baseUrl);
+	}
+
+	private createOpenAIClient(model: string, baseUrl: string) {
+		// Assuming OpenAI client initialization
+		return new openai.OpenAI({ apiKey: this.apiKey, baseURL: baseUrl });
+	}
+
+	chatCompletion(messages: any[]) {
+		const client = this.createClient();
+		return client.chat.completions.create({
+			model: this.llmModelId,
+			messages: messages
+		});
+	}
+}
+
+
+
 class SampleModal extends Modal {
 	constructor(app: App) {
 		super(app);
@@ -121,13 +187,57 @@ class SampleSettingTab extends PluginSettingTab {
 		containerEl.empty();
 
 		new Setting(containerEl)
-			.setName('Setting #1')
-			.setDesc('It\'s a secret')
+			.setName('OpenAI API Key')
+			.setDesc('Enter your OpenAI API key')
 			.addText(text => text
-				.setPlaceholder('Enter your secret')
-				.setValue(this.plugin.settings.mySetting)
+				.setPlaceholder('sk-...')
+				.setValue(this.plugin.settings.openaiApiKey)
 				.onChange(async (value) => {
-					this.plugin.settings.mySetting = value;
+					this.plugin.settings.openaiApiKey = value;
+					await this.plugin.saveSettings();
+				}));
+
+		new Setting(containerEl)
+			.setName('Anthropic API Key')
+			.setDesc('Enter your Anthropic API key')
+			.addText(text => text
+				.setPlaceholder('sk-...')
+				.setValue(this.plugin.settings.anthropicApiKey)
+				.onChange(async (value) => {
+					this.plugin.settings.anthropicApiKey = value;
+					await this.plugin.saveSettings();
+				}));
+
+		new Setting(containerEl)
+			.setName('DeepSeek API Key')
+			.setDesc('Enter your DeepSeek API key')
+			.addText(text => text
+				.setPlaceholder('Enter your DeepSeek API key')
+				.setValue(this.plugin.settings.deepseekApiKey)
+				.onChange(async (value) => {
+					this.plugin.settings.deepseekApiKey = value;
+					await this.plugin.saveSettings();
+				}));
+
+		new Setting(containerEl)
+			.setName('LLM Provider')
+			.setDesc('Enter the LLM provider (deepseek, openai, anthropic)')
+			.addText(text => text
+				.setPlaceholder('e.g., openai')
+				.setValue(this.plugin.settings.llmProvider)
+				.onChange(async (value) => {
+					this.plugin.settings.llmProvider = value;
+					await this.plugin.saveSettings();
+				}));
+
+		new Setting(containerEl)
+			.setName('LLM Model ID')
+			.setDesc('Enter the LLM model ID')
+			.addText(text => text
+				.setPlaceholder('e.g., gpt-4o')
+				.setValue(this.plugin.settings.llmModelId)
+				.onChange(async (value) => {
+					this.plugin.settings.llmModelId = value;
 					await this.plugin.saveSettings();
 				}));
 	}
