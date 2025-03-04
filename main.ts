@@ -24,6 +24,7 @@ const DEFAULT_SETTINGS: MyPluginSettings = {
 export default class MyPlugin extends Plugin {
 	settings: MyPluginSettings;
 	apiCaller: ApiCaller;
+
 	async onload() {
 		await this.loadSettings();
 
@@ -69,7 +70,7 @@ export default class MyPlugin extends Plugin {
 					// If checking is true, we're simply "checking" if the command can be run.
 					// If checking is false, then we want to actually perform the operation.
 					if (!checking) {
-						new SampleModal(this.app).open();
+						new SampleModal(this.app, markdownView).open();
 					}
 
 					// This command will only show up in Command Palette when the check function returns true
@@ -158,13 +159,17 @@ class ApiCaller {
 
 
 class SampleModal extends Modal {
-	constructor(app: App) {
+	markdownView: MarkdownView;
+
+	constructor(app: App, markdownView: MarkdownView) {
 		super(app);
+		this.markdownView = markdownView;
 	}
 
 	onOpen() {
 		const {contentEl} = this;
-		contentEl.setText('Woah!');
+		console.log(this.markdownView);
+		contentEl.setText(this.markdownView.getViewData());
 	}
 
 	onClose() {
