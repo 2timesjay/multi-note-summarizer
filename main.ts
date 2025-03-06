@@ -1,4 +1,4 @@
-import { App, Editor, MarkdownView, Modal, Notice, Plugin, PluginSettingTab, Setting, requestUrl, TFile } from 'obsidian';
+import { App, Editor, getLinkpath, MarkdownView, Modal, Notice, Plugin, PluginSettingTab, Setting, requestUrl, TFile, iterateRefs } from 'obsidian';
 import openai from 'openai';
 
 // Remember to rename these classes and interfaces!
@@ -47,7 +47,8 @@ export default class SummarizerPlugin extends Plugin {
 			id: 'open-summarizer-modal-simple',
 			name: 'Open summarizer modal (simple)',
 			callback: () => {
-				new SummarizerModal(this.app, this.apiCaller, null, false).open();
+				const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
+				new SummarizerModal(this.app, this.apiCaller, activeView, false).open();
 			}
 		});
 		// This adds an editor command that can perform some operation on the current editor instance
@@ -178,10 +179,10 @@ class ApiCaller {
 
 class SummarizerModal extends Modal {
 	apiCaller: ApiCaller;
-	markdownView: MarkdownView;
+	markdownView: MarkdownView | null;
 	summarizeWithLinks: boolean;
 
-	constructor(app: App, apiCaller: ApiCaller, markdownView: MarkdownView, summarizeWithLinks: boolean = false) {
+	constructor(app: App, apiCaller: ApiCaller, markdownView: MarkdownView | null, summarizeWithLinks: boolean = false) {
 		super(app);
 		this.apiCaller = apiCaller;
 		this.markdownView = markdownView;
@@ -218,11 +219,11 @@ class SummarizerModal extends Modal {
 		});
 		
 		try {
-			let content = this.markdownView.getViewData();
+			let content = this.markdownView?.getViewData() || "";
 			let additionalContent = "";
 			
 			// If we need to summarize with links, get linked content
-			if (this.summarizeWithLinks) {
+			if (this.summarizeWithLinks && this.markdownView?.file) {
 				const linkedContents = await this.getLinkedContents(this.markdownView.file);
 				additionalContent = linkedContents;
 			}
@@ -257,8 +258,46 @@ class SummarizerModal extends Modal {
 		}
 	}
 	
-	async getLinkedContents(file: TFile): Promise<string> {
+	async resolveLinkedFile(link: any, vault: any): Promise<TFile | null> {
+		const linkText = link.link;
+		
+		// First, try direct path resolution
+		const linkedFile = vault.getAbstractFileByPath(linkText);
+		if (linkedFile instanceof TFile) {
+			return linkedFile;
+		}
+		
+		// If direct path fails, try finding by name or alias
+		const files = vault.getMarkdownFiles();
+		for (const file of files) {
+			// Check filename without extension
+			const fileName = file.basename;
+			if (fileName === linkText) {
+				console.log("fileName: ", fileName, linkText);
+				return file;
+			}
+			
+			// Check for aliases (if applicable)
+			const metadataCache = this.app.metadataCache;
+			const fileCache = metadataCache.getFileCache(file);
+			if (fileCache?.frontmatter?.aliases) {
+				const aliases = Array.isArray(fileCache.frontmatter.aliases) ? fileCache.frontmatter.aliases : [fileCache.frontmatter.aliases];
+				for (const alias of aliases) {
+					if (alias === linkText) {
+						return file;
+					}
+				}
+			}
+		}
+		
+		return null;
+	}
+
+	async getLinkedContents(file: TFile | null): Promise<string> {
 		const linkedContents: string[] = [];
+		
+		// If no file provided, return empty string
+		if (!file) return "";
 		
 		// Get the file's metadata to extract internal links
 		const metadataCache = this.app.metadataCache;
@@ -274,10 +313,10 @@ class SummarizerModal extends Modal {
 				console.log("link: ", link);
 				try {
 					// Internal Obsidian link
-					const linkedPath = vault.getFileByPath(link.link);
-					console.log("linkedPath: ", linkedPath);
-					if (linkedPath instanceof TFile) {
-						const content = await vault.cachedRead(linkedPath);
+					const linkedFile = await this.resolveLinkedFile(link, vault);
+					console.log("linkedFile: ", linkedFile);
+					if (linkedFile) {
+						const content = await vault.cachedRead(linkedFile);
 						console.log("Content: ", content);
 						linkedContents.push(`Internal Link (${link.link}):\n${content}\n\n`);
 					}
@@ -307,8 +346,6 @@ class SummarizerModal extends Modal {
 		// 		linkedContents.push(`URL Link (${url}): Error fetching content - ${error.message}\n\n`);
 		// 	}
 		// }
-
-		// console.log(linkedContents);
 		
 		return linkedContents.join('');
 	}
