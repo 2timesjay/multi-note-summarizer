@@ -1,4 +1,4 @@
-import { App, Editor, MarkdownView, Modal, Notice, Plugin, PluginSettingTab, Setting } from 'obsidian';
+import { App, Editor, MarkdownView, Modal, Notice, Plugin, PluginSettingTab, Setting, requestUrl, TFile } from 'obsidian';
 import openai from 'openai';
 
 // Remember to rename these classes and interfaces!
@@ -47,7 +47,7 @@ export default class SummarizerPlugin extends Plugin {
 			id: 'open-summarizer-modal-simple',
 			name: 'Open summarizer modal (simple)',
 			callback: () => {
-				new SummarizerModal(this.app, this.apiCaller, null).open();
+				new SummarizerModal(this.app, this.apiCaller, null, false).open();
 			}
 		});
 		// This adds an editor command that can perform some operation on the current editor instance
@@ -70,10 +70,25 @@ export default class SummarizerPlugin extends Plugin {
 					// If checking is true, we're simply "checking" if the command can be run.
 					// If checking is false, then we want to actually perform the operation.
 					if (!checking) {
-						new SummarizerModal(this.app, this.apiCaller, markdownView).open();
+						new SummarizerModal(this.app, this.apiCaller, markdownView, false).open();
 					}
 
 					// This command will only show up in Command Palette when the check function returns true
+					return true;
+				}
+			}
+		});
+		
+		// Add a command to summarize the current note with all linked content
+		this.addCommand({
+			id: 'summarize-current-note-with-links-modal',
+			name: 'Summarize Current Note with Links',
+			checkCallback: (checking: boolean) => {
+				const markdownView = this.app.workspace.getActiveViewOfType(MarkdownView);
+				if (markdownView) {
+					if (!checking) {
+						new SummarizerModal(this.app, this.apiCaller, markdownView, true).open();
+					}
 					return true;
 				}
 			}
@@ -164,11 +179,13 @@ class ApiCaller {
 class SummarizerModal extends Modal {
 	apiCaller: ApiCaller;
 	markdownView: MarkdownView;
+	summarizeWithLinks: boolean;
 
-	constructor(app: App, apiCaller: ApiCaller,markdownView: MarkdownView) {
+	constructor(app: App, apiCaller: ApiCaller, markdownView: MarkdownView, summarizeWithLinks: boolean = false) {
 		super(app);
 		this.apiCaller = apiCaller;
 		this.markdownView = markdownView;
+		this.summarizeWithLinks = summarizeWithLinks;
 	}
 
 	async onOpen() {
@@ -200,27 +217,100 @@ class SummarizerModal extends Modal {
 			`
 		});
 		
-		const content = this.markdownView.getViewData();
-		
-		if (this.apiCaller) {
-			try {
-				const messages = [
-					{ role: "system", content: "You are a helpful assistant that briefly summarizes text." },
-					{ role: "user", content: `Please briefly summarize the following text:\n\n${content}` }
-				];
-				
-				const response = await this.apiCaller.chatCompletion(messages);
-				contentEl.empty();
-				contentEl.createEl('h3', { text: 'Summary' });
-				contentEl.createEl('p', { text: response.choices[0].message.content || 'No summary available' });
-			} catch (error) {
-				contentEl.empty();
-				contentEl.createEl('p', { text: `Error getting summary: ${error.message}` });
-				contentEl.createEl('pre', { text: content });
+		try {
+			let content = this.markdownView.getViewData();
+			let additionalContent = "";
+			
+			// If we need to summarize with links, get linked content
+			if (this.summarizeWithLinks) {
+				const linkedContents = await this.getLinkedContents(this.markdownView.file);
+				additionalContent = linkedContents;
 			}
-		} else {
-			contentEl.setText(`No API caller available. Raw content:\n\n${content}`);
+			
+			if (false) { // TODO: Remove this test line
+			// if (this.apiCaller) {
+				try {
+					const promptContent = this.summarizeWithLinks 
+						? `Please briefly summarize the following text and its linked content:\n\nMain Content:\n${content}\n\nLinked Content:\n${additionalContent}`
+						: `Please briefly summarize the following text:\n\n${content}`;
+						
+					const messages = [
+						{ role: "system", content: "You are a helpful assistant that briefly summarizes text." },
+						{ role: "user", content: promptContent }
+					];
+					
+					const response = await this.apiCaller.chatCompletion(messages);
+					contentEl.empty();
+					contentEl.createEl('h3', { text: this.summarizeWithLinks ? 'Summary (with linked content)' : 'Summary' });
+					contentEl.createEl('p', { text: response.choices[0].message.content || 'No summary available' });
+				} catch (error) {
+					contentEl.empty();
+					contentEl.createEl('p', { text: `Error getting summary: ${error.message}` });
+					contentEl.createEl('pre', { text: content });
+				}
+			} else {
+				contentEl.setText(`No API caller available. Raw content:\n\n${content}`);
+			}
+		} catch (error) {
+			contentEl.empty();
+			contentEl.createEl('p', { text: `Error processing content: ${error.message}` });
 		}
+	}
+	
+	async getLinkedContents(file: TFile): Promise<string> {
+		const linkedContents: string[] = [];
+		
+		// Get the file's metadata to extract internal links
+		const metadataCache = this.app.metadataCache;
+		const vault = this.app.vault;
+		const fileCache = metadataCache.getFileCache(file);
+		
+		// Get file content for URL extraction
+		const fileContent = await vault.cachedRead(file);
+		
+		// Process internal links from metadata cache
+		if (fileCache?.links) {
+			for (const link of fileCache.links) {
+				console.log("link: ", link);
+				try {
+					// Internal Obsidian link
+					const linkedPath = vault.getFileByPath(link.link);
+					console.log("linkedPath: ", linkedPath);
+					if (linkedPath instanceof TFile) {
+						const content = await vault.cachedRead(linkedPath);
+						console.log("Content: ", content);
+						linkedContents.push(`Internal Link (${link.link}):\n${content}\n\n`);
+					}
+				} catch (error) {
+					console.error(`Error processing internal link ${link.link}:`, error);
+				}
+			}
+		}
+		
+		// // Extract and process external URLs directly from file content
+		// function extractUrls(text: string): string[] {
+		// 	const urlRegex = /(https?:\/\/[^\s]+)/g;
+		// 	const urls = text.match(urlRegex) || [];
+		// 	return urls;
+		// }
+		
+		// const urls = extractUrls(fileContent);
+		// for (const url of urls) {
+		// 	console.log("url: ", url);
+		// 	try {
+		// 		const response = await requestUrl({ url });
+		// 		// Basic stripping of HTML tags for simple text extraction
+		// 		const textContent = response.text.replace(/<[^>]*>/g, ' ').substring(0, 5000); // Limit to 5000 chars
+		// 		linkedContents.push(`URL Link (${url}):\n${textContent}\n\n`);
+		// 		console.log("textContent: ", textContent);
+		// 	} catch (error) {
+		// 		linkedContents.push(`URL Link (${url}): Error fetching content - ${error.message}\n\n`);
+		// 	}
+		// }
+
+		// console.log(linkedContents);
+		
+		return linkedContents.join('');
 	}
 
 	onClose() {
