@@ -1,5 +1,7 @@
 import { App, Editor, getLinkpath, MarkdownView, Modal, Notice, Plugin, PluginSettingTab, Setting, requestUrl, TFile, iterateRefs } from 'obsidian';
 import openai from 'openai';
+// import { Scraper } from './scrape';
+// const scraper = new Scraper();
 
 // Remember to rename these classes and interfaces!
 
@@ -303,10 +305,7 @@ class SummarizerModal extends Modal {
 		const metadataCache = this.app.metadataCache;
 		const vault = this.app.vault;
 		const fileCache = metadataCache.getFileCache(file);
-		
-		// Get file content for URL extraction
-		const fileContent = await vault.cachedRead(file);
-		
+
 		// Process internal links from metadata cache
 		if (fileCache?.links) {
 			for (const link of fileCache.links) {
